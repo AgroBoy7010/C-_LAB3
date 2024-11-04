@@ -110,3 +110,220 @@ public abstract class BinaryOperation : Expr
         A = a;
         B = b;
     }
+public override IEnumerable<string> Variables => A.Variables.Union(B.Variables).Distinct();
+    public override bool IsConstant => A.IsConstant && B.IsConstant;
+    public override bool IsPolynomial => A.IsPolynomial && B.IsPolynomial && !(this is Division && !B.IsConstant);
+    public override int PolynomialDegree
+    {
+        get
+        {
+            if (!IsPolynomial) return -1;
+            if (this is Addition || this is Subtraction)
+                return Math.Max(A.PolynomialDegree, B.PolynomialDegree);
+            if (this is Multiplication)
+                return A.PolynomialDegree + B.PolynomialDegree;
+            if (this is Division)
+                return A.PolynomialDegree - (B.IsConstant ? 0 : B.PolynomialDegree);
+            return -1;
+        }
+    }
+
+    public abstract Expr Simplify();
+}
+
+public class BinaryAddition : BinaryOperation
+{
+    public BinaryAddition(Expr left, Expr right) : base(left, right) { }
+
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value + rightConst.Value);
+
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 0)
+            return simplifiedRight;
+        if (simplifiedRight is Constant rightConst && rightConst.Value == 0)
+            return simplifiedLeft;
+
+        return new BinaryAddition(simplifiedLeft, simplifiedRight);
+    }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) + B.Compute(variableValues);
+    public override string ToString() => $"({A} + {B})";
+}
+
+public class BinarySubtraction : BinaryOperation
+{
+    public BinarySubtraction(Expr left, Expr right) : base(left, right) { }
+
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value - rightConst.Value);
+
+        if (simplifiedLeft.Equals(simplifiedRight))
+            return new Constant(0);
+
+        return new BinarySubtraction(simplifiedLeft, simplifiedRight);
+    }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) - B.Compute(variableValues);
+    public override string ToString() => $"({A} - {B})";
+}
+
+public class Multiplication : BinaryOperation
+{
+    public Multiplication(Expr left, Expr right) : base(left, right) { }
+
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value * rightConst.Value);
+
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 0 || simplifiedRight is Constant rightConst && rightConst.Value == 0)
+            return new Constant(0);
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 1)
+            return simplifiedRight;
+        if (simplifiedRight is Constant rightConst && rightConst.Value == 1)
+            return simplifiedLeft;
+
+        return new Multiplication(simplifiedLeft, simplifiedRight);
+    }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) * B.Compute(variableValues);
+    public override string ToString() => $"({A} * {B})";
+}
+
+public class Division : BinaryOperation
+{
+    public Division(Expr left, Expr right) : base(left, right) { }
+
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value / rightConst.Value);
+if (simplifiedRight is Constant rightConst && rightConst.Value == 1)
+            return simplifiedLeft;
+
+        return new Division(simplifiedLeft, simplifiedRight);
+    }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues)
+    {
+        double divisor = B.Compute(variableValues);
+        if (divisor == 0) throw new DivideByZeroException("Деление на ноль не разрешено.");
+        return A.Compute(variableValues) / divisor;
+    }
+    public override string ToString() => $"({A} / {B})";
+}
+public class Sqrt : Function
+{
+    public Sqrt(Expr operand) : base(operand) { }
+
+    public override IEnumerable<string> Variables => Val.Variables;
+    
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues)
+    {
+        double operandValue = Val.Compute(variableValues);
+        if (operandValue < 0)
+            throw new ArgumentException("Square root of a negative number is not allowed.");
+        return Math.Sqrt(operandValue);
+    }
+
+    public override string ToString() => $"Sqrt({Val})";
+}
+public abstract class Function:Expr
+{
+    public Expr Val{ get; }
+    public Function(Expr val) => Val = val;
+    public override IEnumerable<string> Variables => Val.Variables;
+    // public override bool IsConstant => this is Sqrt ? Val.IsConstant : true;
+    // public override int PolynomialDegree => this is Sqrt ? Val.PolynomialDegree /2 : 0; 
+    // public override bool IsPolynomial => this is Sqrt ? Val.PolynomialDegree /2 >0? true: false: false;
+    // public override bool IsConstant => true;
+    // public override int PolynomialDegree =>0;
+    // public override bool IsPolynomial => false;
+    public override bool IsConstant => Val.IsConstant;
+    public override int PolynomialDegree => this is Sqrt && Val.IsPolynomial && Val.PolynomialDegree % 2 == 0 
+    ? Val.PolynomialDegree / 2 : 0;
+    public override bool IsPolynomial => this is Sqrt && Val.IsPolynomial && Val.PolynomialDegree % 2 == 0;
+
+
+
+    public static Expr Sin(Expr operand) => new Sin(operand);
+    public static Expr Cos(Expr operand) => new Cos(operand);
+    public static Expr Tan(Expr operand) => new Tan(operand);
+    public static Expr Ctg(Expr operand) => new Ctg(operand);
+
+}
+public class Sin : Function
+{
+    public Sin(Expr operand) : base(operand) { }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) =>
+        Math.Sin((Val.Compute(variableValues)));
+
+    public override string ToString() => $"Sin({Val})";
+}
+
+public class Cos : Function
+{
+    public Cos(Expr operand) : base(operand) { }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) =>
+        Math.Cos((Val.Compute(variableValues)));
+
+    public override string ToString() => $"Cos({Val})";
+}
+
+public class Tan : Function
+{
+    public Tan(Expr operand) : base(operand) { }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) =>
+        Math.Tan((Val.Compute(variableValues)));
+
+    public override string ToString() => $"Tan({Val})";
+}
+public class Ctg : Function
+{
+    public Ctg(Expr operand) : base(operand) { }
+
+    public override double Compute(IReadOnlyDictionary<string, double> variableValues) =>
+        1 / Math.Tan((Val.Compute(variableValues)));
+
+    public override string ToString() => $"Ctg({Val})";
+}
+
+class Program{
+    
+    static void Main(string[] args){
+        //Тестирование
+        var x = new Variable("x");
+        var y = new Variable("y");
+        var c = new Constant(3);
+        var expr3 = Sin(x);
+        var expr2 =(5 - 3*c) * Sqrt(16 + c*c);
+       Console.WriteLine($"""
+        {expr3.ToString()}
+        [{string.Join(", ", expr3.Variables)}]
+        {expr3.IsConstant}
+        {expr3.IsPolynomial}
+        {expr3.PolynomialDegree}
+        {expr3.Compute(new Dictionary<string, double> { { "x", 1 }, { "y", 2 } })}
+        """);
+    }
+
+}
