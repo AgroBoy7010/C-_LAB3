@@ -11,29 +11,27 @@ public interface IExpr
     bool IsPolynomial { get; }
     int PolynomialDegree { get; }
     double Compute(IReadOnlyDictionary<string, double> variableValues);
+    Expr Simplify();
 }
 
 public abstract class Expr : IExpr
-{   
+{
     public abstract IEnumerable<string> Variables { get; }
     public abstract bool IsConstant { get; }
     public abstract bool IsPolynomial { get; }
     public abstract int PolynomialDegree { get; }
     public abstract double Compute(IReadOnlyDictionary<string, double> variableValues);
+    public virtual Expr Simplify() => this; // По умолчанию упрощение не происходит
 
     public static implicit operator Expr(double arg) => new Constant(arg);
-    public static Expr Sqrt(Expr operand) => new Sqrt(operand);
 
-
-    //Unary
-    
+    // Бинарные и унарные операторы
     public static Expr operator +(Expr operand) => new UnaryPlus(operand);
     public static Expr operator -(Expr operand) => new UnaryMinus(operand);
-    //Binary
-    public static Expr operator +(Expr a, Expr b) => new BinaryAddition(a, b);
-    public static Expr operator -(Expr a, Expr b) => new BinarySubtraction(a, b);
-    public static Expr operator *(Expr a, Expr b) => new Multiplication(a, b);
-    public static Expr operator /(Expr a, Expr b) => new Division(a, b);
+    public static Expr operator +(Expr a, Expr b) => new BinaryAddition(a, b).Simplify();
+    public static Expr operator -(Expr a, Expr b) => new BinarySubtraction(a, b).Simplify();
+    public static Expr operator *(Expr a, Expr b) => new Multiplication(a, b).Simplify();
+    public static Expr operator /(Expr a, Expr b) => new Division(a, b).Simplify();
 }
 
 public class Constant : Expr
@@ -47,6 +45,7 @@ public class Constant : Expr
     public override bool IsPolynomial => true;
     public override int PolynomialDegree => 0;
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => Value;
+    public override Expr Simplify() => this;
     public override string ToString() => Value.ToString();
 }
 
@@ -56,7 +55,7 @@ public class Variable : Expr
 
     public Variable(string name) => Name = name;
 
-   public override IEnumerable<string> Variables
+    public override IEnumerable<string> Variables
     {
         get { yield return Name; }
     }
@@ -66,17 +65,16 @@ public class Variable : Expr
     public override double Compute(IReadOnlyDictionary<string, double> variableValues)
     {
         if (variableValues.TryGetValue(Name, out double value)) return value;
-        else throw new ArgumentException($"Variable {Name} is not defined.");
+        else throw new ArgumentException($"Переменная {Name} не определена.");
     }
-
     public override string ToString() => Name;
 }
 
 public abstract class UnaryOperation : Expr
 {
-    public Expr Operand { get; }
+    protected Expr Operand { get; }
 
-    public UnaryOperation(Expr operand) => Operand = operand;
+    protected UnaryOperation(Expr operand) => Operand = operand;
 
     public override IEnumerable<string> Variables => Operand.Variables;
     public override bool IsConstant => Operand.IsConstant;
@@ -90,6 +88,7 @@ public class UnaryPlus : UnaryOperation
 
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => Operand.Compute(variableValues);
     public override string ToString() => $"+({Operand})";
+    public override Expr Simplify() => Operand.Simplify();
 }
 
 public class UnaryMinus : UnaryOperation
@@ -98,61 +97,82 @@ public class UnaryMinus : UnaryOperation
 
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => -Operand.Compute(variableValues);
     public override string ToString() => $"-({Operand})";
+    public override Expr Simplify() => new UnaryMinus(Operand.Simplify());
 }
 
 public abstract class BinaryOperation : Expr
 {
-    public Expr A { get; }
-    public Expr B { get; }
+    protected Expr A { get; }
+    protected Expr B { get; }
 
-    public BinaryOperation(Expr a, Expr b)
+    protected BinaryOperation(Expr a, Expr b)
     {
         A = a;
         B = b;
     }
 
-    public override IEnumerable<string> Variables => A.Variables.Union(B.Variables);
-
-    // Определение, является ли выражение константой
-    public override bool IsConstant => A.IsConstant && B.IsConstant 
-                                       || A.Equals(B); // Проверка, если A и B идентичны
-
-    // Определение, является ли выражение полиномом
-   public override bool IsPolynomial => 
-    (A.IsPolynomial && B.IsConstant) || (B.IsPolynomial && A.IsConstant) || (A.IsPolynomial && B.IsPolynomial);
-
-
-    // Определение степени полинома с учетом вычитания одинаковых переменных
+    public override IEnumerable<string> Variables => A.Variables.Union(B.Variables).Distinct();
+    public override bool IsConstant => A.IsConstant && B.IsConstant;
+    public override bool IsPolynomial => A.IsPolynomial && B.IsPolynomial && !(this is Division && !B.IsConstant);
     public override int PolynomialDegree
     {
         get
         {
-            if (this is BinarySubtraction && A.Equals(B))
-                return 0; // Степень полинома равна 0, если вычитаются идентичные выражения
-            else if (this is BinaryAddition || this is BinarySubtraction)
-                return Math.Max(A.PolynomialDegree, B.PolynomialDegree); // Для сложения и вычитания
-            else if (this is Multiplication)
-                return A.PolynomialDegree + B.PolynomialDegree; // Для умножения
-            else if (this is Division && B.PolynomialDegree == 0)
-                return A.PolynomialDegree; // Для деления с делителем нулевой степени
-            else
-                return -1; // В случае некорректной операции
+            if (!IsPolynomial) return -1;
+            if (this is Addition || this is Subtraction)
+                return Math.Max(A.PolynomialDegree, B.PolynomialDegree);
+            if (this is Multiplication)
+                return A.PolynomialDegree + B.PolynomialDegree;
+            if (this is Division)
+                return A.PolynomialDegree - (B.IsConstant ? 0 : B.PolynomialDegree);
+            return -1;
         }
     }
-}
 
+    public abstract Expr Simplify();
+}
 
 public class BinaryAddition : BinaryOperation
 {
     public BinaryAddition(Expr left, Expr right) : base(left, right) { }
 
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value + rightConst.Value);
+
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 0)
+            return simplifiedRight;
+        if (simplifiedRight is Constant rightConst && rightConst.Value == 0)
+            return simplifiedLeft;
+
+        return new BinaryAddition(simplifiedLeft, simplifiedRight);
+    }
+
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) + B.Compute(variableValues);
     public override string ToString() => $"({A} + {B})";
 }
 
-public class BinarySubtraction : BinaryOperation //например тест x^2-x^2 выведет что степень полинома 2. а должна 0
+public class BinarySubtraction : BinaryOperation
 {
-    public BinarySubtraction(Expr a, Expr b) : base(a, b) { }
+    public BinarySubtraction(Expr left, Expr right) : base(left, right) { }
+
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value - rightConst.Value);
+
+        if (simplifiedLeft.Equals(simplifiedRight))
+            return new Constant(0);
+
+        return new BinarySubtraction(simplifiedLeft, simplifiedRight);
+    }
 
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) - B.Compute(variableValues);
     public override string ToString() => $"({A} - {B})";
@@ -160,26 +180,56 @@ public class BinarySubtraction : BinaryOperation //например тест x^2
 
 public class Multiplication : BinaryOperation
 {
-    public Multiplication(Expr a, Expr b) : base(a, b) { }
+    public Multiplication(Expr left, Expr right) : base(left, right) { }
 
-    public override int PolynomialDegree => A.PolynomialDegree + B.PolynomialDegree;
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value * rightConst.Value);
+
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 0 || simplifiedRight is Constant rightConst && rightConst.Value == 0)
+            return new Constant(0);
+        if (simplifiedLeft is Constant leftConst && leftConst.Value == 1)
+            return simplifiedRight;
+        if (simplifiedRight is Constant rightConst && rightConst.Value == 1)
+            return simplifiedLeft;
+
+        return new Multiplication(simplifiedLeft, simplifiedRight);
+    }
+
     public override double Compute(IReadOnlyDictionary<string, double> variableValues) => A.Compute(variableValues) * B.Compute(variableValues);
     public override string ToString() => $"({A} * {B})";
 }
 
-public class Division : BinaryOperation// в делении не переопределеана степень (PolynomialDegree), тк максимум из 2 но для деления это не так
+public class Division : BinaryOperation
 {
-    public Division(Expr a, Expr b) : base(a, b) { }
+    public Division(Expr left, Expr right) : base(left, right) { }
 
-    public override bool IsPolynomial => A.IsPolynomial && B.IsPolynomial && B.PolynomialDegree == 0;
+    public override Expr Simplify()
+    {
+        Expr simplifiedLeft = A.Simplify();
+        Expr simplifiedRight = B.Simplify();
+
+        if (simplifiedLeft is Constant leftConst && simplifiedRight is Constant rightConst)
+            return new Constant(leftConst.Value / rightConst.Value);
+
+        if (simplifiedRight is Constant rightConst && rightConst.Value == 1)
+            return simplifiedLeft;
+
+        return new Division(simplifiedLeft, simplifiedRight);
+    }
+
     public override double Compute(IReadOnlyDictionary<string, double> variableValues)
     {
         double divisor = B.Compute(variableValues);
-        if (divisor == 0)
-            throw new DivideByZeroException("Division by zero is not allowed.");
+        if (divisor == 0) throw new DivideByZeroException("Деление на ноль не разрешено.");
         return A.Compute(variableValues) / divisor;
     }
     public override string ToString() => $"({A} / {B})";
+}
 }
 
 public class Sqrt : Function
